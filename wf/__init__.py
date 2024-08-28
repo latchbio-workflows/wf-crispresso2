@@ -87,7 +87,7 @@ def crispresso2_test(
     verbosity: int = 3,
     zip_output: bool = False,
     disable_guardrails: bool = False,
-) -> LatchDir:
+) -> LatchOutputDir:
     """Analysis of deep sequencing data for rapid and intuitive interpretation of genome editing experiments
 
     # CRISPResso2
@@ -115,9 +115,10 @@ def crispresso2_test(
     - visualization of distribution and position of substitutions (for base editors)
     - visualization of alleles and their frequencies"""
 
-    run_dir = Initialize(outdir=output_folder, run_name=run_name)
+    # run_dir = Initialize(outdir=output_folder, run_name=run_name)
     results = crispresso2(
-        output_folder=run_dir,
+        output_folder=output_folder,
+        run_name=run_name,
         fastq_r1=fastq_r1,
         fastq_r2=fastq_r2,
         amplicon_seq=amplicon_seq,

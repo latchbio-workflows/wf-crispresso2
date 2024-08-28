@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -8,7 +9,7 @@ from latch.account import Account
 from latch.registry.project import Project
 from latch.registry.table import Table
 from latch.resources.tasks import small_task
-from latch.types.directory import LatchDir
+from latch.types.directory import LatchDir, LatchOutputDir
 from latch.types.file import LatchFile
 
 
@@ -24,6 +25,7 @@ def Initialize(outdir: LatchDir, run_name: str) -> LatchDir:
 @small_task
 def crispresso2(
     output_folder: LatchDir,
+    run_name: str,
     fastq_r1: LatchFile,
     amplicon_seq: List[str],
     fastq_r2: Optional[LatchFile] = None,
@@ -154,6 +156,7 @@ def crispresso2(
         "fastq_r2": True,
         "amplicon_seq": True,
         "name": True,
+        "run_name": True,
     }
     optional_cmd_params = []
     for param, value in header_args.items():
@@ -171,9 +174,16 @@ def crispresso2(
 
     if name is None or name == "":
         name = Path(fastq_r1_path).name.split(".")[0]
-    crisp_output_dir = Path(f"CRISPResso_on_{name}")
-    if not os.path.isdir(crisp_output_dir):
-        os.mkdir(crisp_output_dir)
+
+    local_output_dir = Path(f"/root/outputs")
+    local_output_dir.mkdir(parents=True, exist_ok=True)
+
+    local_run_dir = Path(f"/root/outputs/{run_name}")
+    local_run_dir.mkdir(parents=True, exist_ok=True)
+    crisp_output_dir = Path(f"/root/outputs/{run_name}/CRISPResso_on_{name}")
+    crisp_output_dir.mkdir(parents=True, exist_ok=True)
+    # if not os.path.isdir(crisp_output_dir):
+    #    os.mkdir(crisp_output_dir)
 
     crispresso_cmd = [
         "mamba",
@@ -203,13 +213,9 @@ def crispresso2(
     else:
         print("No process output generated")
 
-    print(os.listdir(crisp_output_dir))
-
-    print(os.path.join(output_folder.remote_directory, crisp_output_dir.name))
-
-    return LatchDir(
-        str(crisp_output_dir.resolve()),
-        os.path.join(output_folder.remote_directory, name),
+    return LatchOutputDir(
+        str(local_output_dir.resolve()),
+        output_folder.remote_directory,
     )
 
 
@@ -217,15 +223,15 @@ def crispresso2(
 def Update_Registry_Tables(outdir: LatchDir, run_name: str, sample: str) -> str:
     print(outdir)
 
-    data_path = f"{outdir.local_path}/CRISPResso_on_{sample}"
-    print(data_path)
-    df = pd.read_csv(
-        f"{data_path}/CRISPResso_mapping_statistics.txt", sep="\t"
-    ).T.to_dict()[0]
-    df_indels = pd.read_csv(
-        f"{data_path}/Alleles_frequency_table.zip",
-        sep="\t",
+    mapping_statistics_file = LatchFile(
+        f"{outdir.remote_path}/{run_name}/CRISPResso_on_{sample}/CRISPResso_on_{sample}/CRISPResso_mapping_statistics.txt"
     )
+    allele_freq_file = LatchFile(
+        f"{outdir.remote_path}/{run_name}/CRISPResso_on_{sample}/CRISPResso_on_{sample}/Alleles_frequency_table.zip"
+    )
+
+    df = pd.read_csv(mapping_statistics_file.local_path, sep="\t").T.to_dict()[0]
+    df_indels = pd.read_csv(allele_freq_file.local_path, sep="\t")
     df_indels_only = df_indels[
         ((df_indels["n_deleted"] > 0) | (df_indels["n_inserted"] > 0))
     ]
@@ -268,59 +274,56 @@ def Update_Registry_Tables(outdir: LatchDir, run_name: str, sample: str) -> str:
 
     columns = ["sample"] + columns
     col_types = [str] + col_types
-
-    registry_table = f"{run_name}_Results"
+    d["sample"] = sample
+    target_project_name = "Crispresso2_Runs"
+    target_table_name = f"{run_name}_Results"
     account = Account.current()
-    target_project_id = ""
-    for project in account.list_registry_projects():
-        if project.get_display_name() == "Crispresso2_Runs":
-            target_project_id = project.id
+    target_project = next(
+        (
+            project
+            for project in account.list_registry_projects()
+            if project.get_display_name() == target_project_name
+        ),
+        None,
+    )
 
-    target_project = Project(target_project_id)
-    flag = False
-    for table in target_project.list_tables():
-        print(table.get_display_name(), registry_table)
-        if table.get_display_name() == registry_table:
-            target_table = Table(table.id)
-            flag = True
+    if target_project is None:
+        with account.update() as account_updater:
+            account_updater.upsert_registry_project(target_project_name)
+        target_project = next(
+            project
+            for project in account.list_registry_projects()
+            if project.get_display_name() == target_project_name
+        )
+        print("Upserted project")
 
-    if not flag:
-        target_project = Project(target_project_id)
-        with target_project.update() as updater:
-            updater.upsert_table(registry_table)
+    target_table = next(
+        (
+            table
+            for table in target_project.list_tables()
+            if table.get_display_name() == target_table_name
+        ),
+        None,
+    )
 
-        for table in target_project.list_tables():
-            print(table.get_display_name())
-            if table.get_display_name() == registry_table:
-                target_table = Table(table.id)
-                with target_table.update() as updater:
-                    for i in range(0, len(columns)):
-                        updater.upsert_column(columns[i], type=col_types[i])
-            print("Done")
-    print(d)
+    if target_table == None:
+        ### Upsert_Table
+        with target_project.update() as project_updater:
+            project_updater.upsert_table(target_table_name)
+        target_table = next(
+            table
+            for table in target_project.list_tables()
+            if table.get_display_name() == target_table_name
+        )
+        print("Upserted table")
+
+        with target_table.update() as updater:
+            for i in range(0, len(columns)):
+                updater.upsert_column(columns[i], type=col_types[i])
+        print("Upserted columns")
 
     with target_table.update() as updater:
         ctr = len(target_table.get_dataframe())
-        updater.upsert_record(
-            name=str(ctr),
-            sample=sample,
-            num_reads=d["num_reads"],
-            num_reads_after_preprocessing=d["num_reads_after_preprocessing"],
-            frac_reads_after_preprocessing=d["frac_reads_after_preprocessing"],
-            num_reads_aligned=d["num_reads_aligned"],
-            frac_reads_aligned=d["frac_reads_aligned"],
-            num_discarded_reads=d["num_discarded_reads"],
-            frac_discarded_reads=d["frac_discarded_reads"],
-            Allele_1=d["Allele_1"],
-            Read_Frac_Allele_1=d["Read_Frac_Allele_1"],
-            Allele_2=d["Allele_2"],
-            Read_Frac_Allele_2=d["Read_Frac_Allele_2"],
-            Allele_3=d["Allele_3"],
-            Read_Frac_Allele_3=d["Read_Frac_Allele_3"],
-            Allele_4=d["Allele_4"],
-            Read_Frac_Allele_4=d["Read_Frac_Allele_4"],
-            Allele_5=d["Allele_5"],
-            Read_Frac_Allele_5=d["Read_Frac_Allele_5"],
-        )
+        updater.upsert_record(name=str(ctr), **d)
 
     return target_table.id
