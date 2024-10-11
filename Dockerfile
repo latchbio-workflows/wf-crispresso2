@@ -21,7 +21,7 @@ arg DEBIAN_FRONTEND=noninteractive
 
 # Latch SDK
 # DO NOT REMOVE
-run pip install latch==2.50.3
+run pip install latch==2.52.1
 run mkdir /opt/latch
 
 RUN apt-get update -y && \

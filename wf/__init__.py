@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from latch.resources.workflow import workflow
-from latch.types.directory import LatchDir
+from latch.types.directory import LatchDir, LatchOutputDir
 from latch.types.file import LatchFile
 
 from wf.Parameters import metadata
@@ -12,7 +12,7 @@ from wf.task import *
 def crispresso2_test(
     sample_name: str,
     run_name: str,
-    output_folder: LatchDir,
+    output_folder: LatchOutputDir,
     fastq_r1: LatchFile,
     amplicon_seq: List[str],
     fastq_r2: Optional[LatchFile] = None,
@@ -40,7 +40,6 @@ def crispresso2_test(
     dsODN: Optional[str] = None,
     bam_input: Optional[str] = None,
     bam_chr_loc: Optional[str] = None,
-    custom_default_min_aln_score: Optional[int] = None,
     min_frequency_alleles_around_cut_to_plot: float = 0.2,
     max_rows_alleles_around_cut_to_plot: int = 50,
     exclude_bp_from_left: int = 15,
@@ -51,7 +50,7 @@ def crispresso2_test(
     conversion_nuc_from: str = "C",
     conversion_nuc_to: str = "T",
     prime_editing_pegRNA_extension_quantification_window_size: int = 5,
-    quantification_window_size: int = 1,
+    quantification_window_size: int = -3,
     quantification_window_center: int = -3,
     default_min_aln_score: int = 60,
     plot_window_size: int = 20,
@@ -149,7 +148,6 @@ def crispresso2_test(
         discard_indel_reads=discard_indel_reads,
         amplicon_min_alignment_score=amplicon_min_alignment_score,
         default_min_aln_score=default_min_aln_score,
-        custom_default_min_aln_score=custom_default_min_aln_score,
         expand_ambiguous_alignments=expand_ambiguous_alignments,
         needleman_wunsch_gap_open=needleman_wunsch_gap_open,
         needleman_wunsch_gap_extend=needleman_wunsch_gap_extend,
@@ -196,7 +194,7 @@ def crispresso2_test(
     )
     print(results)
 
-    table_id = Update_Registry_Tables(
+    table_id = update_registry_tables(
         outdir=results, run_name=run_name, sample=sample_name
     )
     return results

@@ -1,3 +1,6 @@
+import typing
+from dataclasses import dataclass
+
 from latch.types import (
     LatchAuthor,
     LatchMetadata,
@@ -13,13 +16,11 @@ from latch.types.metadata import (
 
 flow = [
     Section(
-        "Inputs/Outputs",
+        "Inputs Options",
         Params(
             "fastq_r1",
             "fastq_r2",
             "sample_name",
-            "run_name",
-            "output_folder",
         ),
         Spoiler(
             "Optional",
@@ -59,6 +60,13 @@ flow = [
             ),
         ),
     ),
+    Section(
+        "Output Options",
+        Params(
+            "run_name",
+            "output_folder",
+        ),
+    ),
     Spoiler(
         "Optional Crispresso2 Arguments",
         Spoiler(
@@ -69,7 +77,8 @@ flow = [
             "Prime Editing Parameters",
             Params(
                 "prime_editing_pegRNA_extension_quantification_window_size",
-                "prime_editing_pegRNA_spacer_seq" "prime_editing_pegRNA_extension_seq",
+                "prime_editing_pegRNA_spacer_seq",
+                "prime_editing_pegRNA_extension_seq",
                 "prime_editing_pegRNA_scaffold_seq",
                 "prime_editing_pegRNA_scaffold_min_match_length",
                 "prime_editing_nicking_guide_seq",
@@ -275,11 +284,11 @@ metadata = LatchMetadata(
         ),
         "prime_editing_pegRNA_scaffold_seq": LatchParameter(
             description="If given, reads containing any of this scaffold sequence before extension sequence (provided by --prime_editing_extension_seq) will be classified as 'Scaffold-incorporated'. The sequence should be given in the 5'->3' order such that the RT template directly follows this sequence. A common value ends with 'GGCACCGAGUCGGUGC'.",
-            display_name="Scaffold Sequence",
+            display_name="Prime Editing pegRNA Scaffold Sequence",
         ),
         "prime_editing_pegRNA_scaffold_min_match_length": LatchParameter(
             description="Minimum number of bases matching scaffold sequence for the read to be counted as 'Scaffold-incorporated'. If the scaffold sequence matches the reference sequence at the incorporation site, the minimum number of bases to match will be minimally increased (beyond this parameter) to disambiguate between prime-edited and scaffold-incorporated sequences.",
-            display_name="Scaffold Sequence",
+            display_name="Prime Editing pegRNA Scaffold Sequence Min. Mismatch Length",
         ),
         "prime_editing_override_prime_edited_ref_seq": LatchParameter(
             description="If given, this sequence will be used as the prime-edited reference sequence. This may be useful if the prime-edited reference sequence has large indels or the algorithm cannot otherwise infer the correct reference sequence.",
@@ -484,6 +493,43 @@ metadata = LatchMetadata(
         ),
         "disable_guardrails": LatchParameter(
             display_name="Disable Guardrails", description="Disable guardrail warnings"
+        ),
+        "fastp_command": LatchParameter(
+            display_name="fastp command", description="fastp command"
+        ),
+        "quantification_window_coordinates": LatchParameter(
+            display_name="Quantification Window Coordinates",
+            description="Bp positions in the amplicon sequence specifying the quantification window. This parameter overrides values of the '--quantification_window_center', '--cleavage_offset', '--window_around_sgrna' or '--window_around_sgrna' values. Any indels/substitutions outside this window are excluded. Indexes are 0-based, meaning that the first nucleotide is position 0. Ranges are separted by the dash sign (e.g. 'start-stop'), and multiple ranges can be separated by the underscore (_) (can be comma-separated list of values, corresponding to amplicon sequences given in --amplicon_seq e.g. 5-10,5-10_20-30 would specify the 6th-11th bp in the first reference and the 6th-11th and 21st-31st bp in the second reference). A value of 0 disables this filter for a particular amplicon (e.g. 0,90-110 This would disable the quantification window for the first amplicon and specify the quantification window of 90-110 for the second).Note that if there are multiple amplicons provided, and only one quantification window coordinate is provided, the same quantification window will be used for all amplicons and be adjusted to account for insertions/deletions.",
+        ),
+        "amplicon_min_alignment_score": LatchParameter(
+            display_name="Amplicon Min Alignment Score",
+            description=" Amplicon Minimum Alignment Score; score between 0 and 100; sequences must have at least this homology score with the amplicon to be aligned (can be comma-separated list of multiple scores, corresponding to amplicon sequences given in --amplicon_seq)",
+        ),
+        "name": LatchParameter(
+            display_name="Sample Name",
+            description="Output name of the report (default: the name is obtained from the filename of the fastq file/s used in input)",
+        ),
+        "dump": LatchParameter(
+            display_name="Dump",
+            description="Dump numpy arrays and pandas dataframes to file for debugging purposes",
+        ),
+        "debug": LatchParameter(
+            display_name="Debug", description="Show debug messages"
+        ),
+        "no_rerun": LatchParameter(
+            display_name="No Rerun",
+            description="Don't rerun CRISPResso2 if a run using the same parameters has already been finished.",
+        ),
+        "auto": LatchParameter(
+            display_name="Auto",
+            description="Infer amplicon sequence from most common reads",
+        ),
+        "needleman_wunsch_aln_matrix_loc": LatchParameter(
+            display_name="Needleman Wunsch Alignment Matrix Location",
+            description="Help: Location of the matrix specifying substitution scores in the NCBI format (see ftp://ftp.ncbi.nih.gov/blast/matrices/",
+        ),
+        "keep_intermediate": LatchParameter(
+            display_name="keep intermediate", description="keep intermediate"
         ),
     },
     flow=flow,

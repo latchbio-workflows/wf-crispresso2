@@ -53,7 +53,6 @@ def crispresso2(
     dsODN: Optional[str] = None,
     bam_input: Optional[str] = None,
     bam_chr_loc: Optional[str] = None,
-    custom_default_min_aln_score: Optional[int] = None,
     min_frequency_alleles_around_cut_to_plot: float = 0.2,
     max_rows_alleles_around_cut_to_plot: int = 50,
     exclude_bp_from_left: int = 15,
@@ -64,7 +63,7 @@ def crispresso2(
     conversion_nuc_from: str = "C",
     conversion_nuc_to: str = "T",
     prime_editing_pegRNA_extension_quantification_window_size: int = 5,
-    quantification_window_size: int = 1,
+    quantification_window_size: int = -3,
     quantification_window_center: int = -3,
     default_min_aln_score: int = 60,
     plot_window_size: int = 20,
@@ -105,16 +104,34 @@ def crispresso2(
         name = name.replace(" ", "_")
 
     amplicon_seq = ",".join(amplicon_seq)
+    amplicon_seq = amplicon_seq.upper()
+
     if amplicon_name is not None:
         amplicon_name = ",".join(amplicon_name)
     if guide_seq is not None:
         guide_seq = ",".join(guide_seq)
+        guide_seq = guide_seq.upper()
+
     if guide_name is not None:
         guide_name = ",".join(guide_name)
     if amplicon_min_alignment_score is not None:
         amplicon_min_alignment_score = ",".join(
             [str(x) for x in amplicon_min_alignment_score]
         )
+    if prime_editing_pegRNA_spacer_seq != None:
+        prime_editing_pegRNA_spacer_seq = prime_editing_pegRNA_spacer_seq.upper()
+    if prime_editing_pegRNA_extension_seq != None:
+        prime_editing_pegRNA_extension_seq = prime_editing_pegRNA_extension_seq.upper()
+    if prime_editing_pegRNA_scaffold_seq != None:
+        prime_editing_pegRNA_scaffold_seq = prime_editing_pegRNA_scaffold_seq.upper()
+    if prime_editing_nicking_guide_seq != None:
+        prime_editing_nicking_guide_seq = prime_editing_nicking_guide_seq.upper()
+    if prime_editing_override_prime_edited_ref_seq != None:
+        prime_editing_override_prime_edited_ref_seq = (
+            prime_editing_override_prime_edited_ref_seq.upper()
+        )
+    if flexiguide_seq != None:
+        flexiguide_seq = flexiguide_seq.upper()
 
     header_args = locals()
 
@@ -220,26 +237,27 @@ def crispresso2(
 
 
 @small_task
-def Update_Registry_Tables(outdir: LatchDir, run_name: str, sample: str) -> str:
+def update_registry_tables(outdir: LatchOutputDir, run_name: str, sample: str) -> str:
     print(outdir)
-
+    sample_dir = f"{outdir.remote_path}/{run_name}/CRISPResso_on_{sample}/CRISPResso_on_{sample}/"
+    for g in LatchDir(sample_dir).iterdir():
+        fname = Path(g.remote_path).name
+        if fname.startswith("Alleles_frequency_table_around_sgRNA_"):
+            allele_freq_file = g
     mapping_statistics_file = LatchFile(
-        f"{outdir.remote_path}/{run_name}/CRISPResso_on_{sample}/CRISPResso_on_{sample}/CRISPResso_mapping_statistics.txt"
+        f"{sample_dir}CRISPResso_mapping_statistics.txt"
     )
-    allele_freq_file = LatchFile(
-        f"{outdir.remote_path}/{run_name}/CRISPResso_on_{sample}/CRISPResso_on_{sample}/Alleles_frequency_table.zip"
+    editing_quantification = LatchFile(
+        f"{sample_dir}CRISPResso_quantification_of_editing_frequency.txt"
     )
 
+    df_editing_quantification = pd.read_csv(editing_quantification, sep="\t")
     df = pd.read_csv(mapping_statistics_file.local_path, sep="\t").T.to_dict()[0]
-    df_indels = pd.read_csv(allele_freq_file.local_path, sep="\t")
-    df_indels_only = df_indels[
-        ((df_indels["n_deleted"] > 0) | (df_indels["n_inserted"] > 0))
-    ]
-
     d = {}
     num_reads = df["READS IN INPUTS"]
 
     d["num_reads"] = df["READS IN INPUTS"]
+
     d["num_reads_after_preprocessing"] = df["READS AFTER PREPROCESSING"]
     d["frac_reads_after_preprocessing"] = (
         d["num_reads_after_preprocessing"] / num_reads * 100.0
@@ -248,6 +266,11 @@ def Update_Registry_Tables(outdir: LatchDir, run_name: str, sample: str) -> str:
     d["frac_reads_aligned"] = d["num_reads_aligned"] / num_reads * 100.0
     d["num_discarded_reads"] = num_reads - d["num_reads_aligned"]
     d["frac_discarded_reads"] = d["num_discarded_reads"] / num_reads * 100.0
+    d["Unmodified%"] = float(df_editing_quantification.iloc[0]["Unmodified%"])
+    d["Modified%"] = float(df_editing_quantification.iloc[0]["Modified%"])
+    d["Deletions"] = float(df_editing_quantification.iloc[0]["Deletions"])
+    d["Deletion%"] = d["Deletions"] / d["num_reads"] * 100.0
+
     columns = [
         "num_reads",
         "num_reads_after_preprocessing",
@@ -256,25 +279,38 @@ def Update_Registry_Tables(outdir: LatchDir, run_name: str, sample: str) -> str:
         "frac_reads_aligned",
         "num_discarded_reads",
         "frac_discarded_reads",
+        "Unmodified%",
+        "Modified%",
+        "Deletions",
+        "Deletion%",
     ]
-    col_types = [float] * 7
+    col_types = [float] * 11
 
-    top_5_alleles = df_indels.head(5)
-    top_5_alleles[["Aligned_Sequence", "%Reads"]]
-    alleles = top_5_alleles["Aligned_Sequence"].tolist()
-    read_fracs = top_5_alleles["%Reads"].tolist()
+    try:
+        df_indels = pd.read_csv(allele_freq_file.local_path, sep="\t")
+        df_indels_only = df_indels[
+            ((df_indels["n_deleted"] > 0) | (df_indels["n_inserted"] > 0))
+        ]
 
-    for i in range(len(alleles)):
-        d[f"Allele_{str(i+1)}"] = alleles[i]
-        d[f"Read_Frac_Allele_{str(i+1)}"] = read_fracs[i]
-        columns.append(f"Allele_{str(i+1)}")
-        col_types.append(str)
-        columns.append(f"Read_Frac_Allele_{str(i+1)}")
-        col_types.append(float)
+        top_5_alleles = df_indels.head(5)
+        top_5_alleles[["Aligned_Sequence", "%Reads"]]
+        alleles = top_5_alleles["Aligned_Sequence"].tolist()
+        read_fracs = top_5_alleles["%Reads"].tolist()
+
+        for i in range(len(alleles)):
+            d[f"Allele_{str(i+1)}"] = alleles[i]
+            d[f"Read_Frac_Allele_{str(i+1)}"] = read_fracs[i]
+            columns.append(f"Allele_{str(i+1)}")
+            col_types.append(str)
+            columns.append(f"Read_Frac_Allele_{str(i+1)}")
+            col_types.append(float)
+    except Exception:
+        print("Allele Frequency Tables missing. Probably a prime editing experiment? ")
 
     columns = ["sample"] + columns
     col_types = [str] + col_types
     d["sample"] = sample
+    print(d)
     target_project_name = "Crispresso2_Runs"
     target_table_name = f"{run_name}_Results"
     account = Account.current()
@@ -321,6 +357,7 @@ def Update_Registry_Tables(outdir: LatchDir, run_name: str, sample: str) -> str:
             for i in range(0, len(columns)):
                 updater.upsert_column(columns[i], type=col_types[i])
         print("Upserted columns")
+    print(d)
 
     with target_table.update() as updater:
         ctr = len(target_table.get_dataframe())

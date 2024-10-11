@@ -1,0 +1,119 @@
+Step 1/17 : from 812206152185.dkr.ecr.us-west-2.amazonaws.com/latch-base:fe0b-main
+
+
+ ---> f23c37efcd53
+
+Step 2/17 : workdir /tmp/docker-build/work/
+
+
+ ---> Using cache
+
+ ---> dd16c2d4f334
+
+Step 3/17 : shell [     "/usr/bin/env", "bash",     "-o", "errexit",     "-o", "pipefail",     "-o", "nounset",     "-o", "verbose",     "-o", "errtrace",     "-O", "inherit_errexit",     "-O", "shift_verbose",     "-c" ]
+
+
+ ---> Using cache
+
+ ---> aaada0c60239
+
+Step 4/17 : env TZ='Etc/UTC'
+
+
+ ---> Using cache
+
+ ---> d6869bc03deb
+
+Step 5/17 : env LANG='en_US.UTF-8'
+
+
+ ---> Using cache
+
+ ---> ae2f7ca65880
+
+Step 6/17 : arg DEBIAN_FRONTEND=noninteractive
+
+
+ ---> Using cache
+
+ ---> f029b3f36a86
+
+Step 7/17 : run pip install latch==2.52.1
+
+
+ ---> Using cache
+
+ ---> 77227e9da9ee
+
+Step 8/17 : run mkdir /opt/latch
+
+
+ ---> Using cache
+
+ ---> 5960726dd602
+
+Step 9/17 : RUN apt-get update -y && apt-get install -y autoconf curl zip unzip wget gcc git make libbz2-dev zlib1g-dev pip libncurses5-dev libncursesw5-dev liblzma-dev libtool autoconf build-essential pkg-config automake tcsh
+
+
+ ---> Using cache
+
+ ---> 2b8416f946b6
+
+Step 10/17 : RUN pip install pandas
+
+
+ ---> Using cache
+
+ ---> e9f248a21ce7
+
+Step 11/17 : RUN wget https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh &&     bash Mambaforge-Linux-x86_64.sh -b -p /mambaforge &&     rm Mambaforge-Linux-x86_64.sh
+
+
+ ---> Using cache
+
+ ---> 0293f3ac447a
+
+Step 12/17 : ENV PATH="/mambaforge/bin:$PATH"
+
+
+ ---> Using cache
+
+ ---> 3723f9227fe3
+
+Step 13/17 : RUN mamba create -n crispresso2_env -c conda-forge -c bioconda crispresso2
+
+
+ ---> Using cache
+
+ ---> b5db1efc0cad
+
+Step 14/17 : copy . /root/
+
+
+ ---> 22d33de1a4cb
+
+Step 15/17 : arg tag
+
+
+ ---> Running in c630656998fa
+
+ ---> aaafcb39bf6c
+
+Step 16/17 : env FLYTE_INTERNAL_IMAGE $tag
+
+
+ ---> Running in 653cdd37d99a
+
+ ---> 499052d30c0d
+
+Step 17/17 : workdir /root
+
+
+ ---> Running in 58c8193d5a82
+
+ ---> cd535c117639
+
+Successfully built cd535c117639
+
+Successfully tagged 812206152185.dkr.ecr.us-west-2.amazonaws.com/35729_wf_init_crispresso2_test:0.1.0-fc1a36-wip-982623
+
