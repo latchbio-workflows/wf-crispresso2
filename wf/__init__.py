@@ -4,7 +4,7 @@ from latch.resources.workflow import workflow
 from latch.types.directory import LatchDir, LatchOutputDir
 from latch.types.file import LatchFile
 
-from wf.Parameters import metadata
+from wf.Parameters import Guide_RNA, metadata
 from wf.task import *
 
 
@@ -15,8 +15,8 @@ def crispresso2_test(
     output_folder: LatchOutputDir,
     fastq_r1: LatchFile,
     amplicon_seq: List[str],
+    sgRNA_Seq: List[Guide_RNA],
     fastq_r2: Optional[LatchFile] = None,
-    guide_seq: Optional[List[str]] = None,
     amplicon_name: Optional[List[str]] = None,
     expected_hdr_amplicon_seq: Optional[str] = None,
     coding_seq: Optional[str] = None,
@@ -122,7 +122,7 @@ def crispresso2_test(
         fastq_r2=fastq_r2,
         amplicon_seq=amplicon_seq,
         amplicon_name=amplicon_name,
-        guide_seq=guide_seq,
+        sgRNA_Seq=sgRNA_Seq,
         expected_hdr_amplicon_seq=expected_hdr_amplicon_seq,
         coding_seq=coding_seq,
         guide_name=guide_name,

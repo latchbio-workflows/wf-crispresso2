@@ -12,6 +12,8 @@ from latch.resources.tasks import small_task
 from latch.types.directory import LatchDir, LatchOutputDir
 from latch.types.file import LatchFile
 
+from wf.Parameters import Guide_RNA
+
 
 @small_task
 def Initialize(outdir: LatchDir, run_name: str) -> LatchDir:
@@ -28,8 +30,8 @@ def crispresso2(
     run_name: str,
     fastq_r1: LatchFile,
     amplicon_seq: List[str],
+    sgRNA_Seq: List[Guide_RNA],
     fastq_r2: Optional[LatchFile] = None,
-    guide_seq: Optional[List[str]] = None,
     amplicon_name: Optional[List[str]] = None,
     expected_hdr_amplicon_seq: Optional[str] = None,
     coding_seq: Optional[str] = None,
@@ -108,9 +110,6 @@ def crispresso2(
 
     if amplicon_name is not None:
         amplicon_name = ",".join(amplicon_name)
-    if guide_seq is not None:
-        guide_seq = ",".join(guide_seq)
-        guide_seq = guide_seq.upper()
 
     if guide_name is not None:
         guide_name = ",".join(guide_name)
@@ -174,7 +173,9 @@ def crispresso2(
         "amplicon_seq": True,
         "name": True,
         "run_name": True,
+        "sgRNA_Seq": True,
     }
+
     optional_cmd_params = []
     for param, value in header_args.items():
         if param not in protected_params and value is not None:
@@ -191,6 +192,13 @@ def crispresso2(
 
     if name is None or name == "":
         name = Path(fastq_r1_path).name.split(".")[0]
+
+    if sgRNA_Seq is not None:
+        guide_seqs = []
+        for c in sgRNA_Seq:
+            guide_seqs.append(c.guide_seq)
+        guide_rna = ",".join(guide_seqs)
+        guide_rna = guide_rna.upper()
 
     local_output_dir = Path(f"/root/outputs")
     local_output_dir.mkdir(parents=True, exist_ok=True)
@@ -214,7 +222,10 @@ def crispresso2(
         amplicon_seq,
         "--output_folder",
         str(crisp_output_dir),
-    ] + optional_cmd_params
+    ]
+    if sgRNA_Seq is not None:
+        crispresso_cmd += ["--guide_seq", guide_rna]
+    crispresso_cmd += optional_cmd_params
 
     crispresso_cmd.extend(("--name", name))
     if fastq_r2 is not None:

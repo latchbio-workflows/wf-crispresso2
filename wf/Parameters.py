@@ -1,5 +1,5 @@
-import typing
 from dataclasses import dataclass
+from typing import Optional
 
 from latch.types import (
     LatchAuthor,
@@ -13,6 +13,12 @@ from latch.types.metadata import (
     Multiselect,
     MultiselectOption,
 )
+
+
+@dataclass
+class Guide_RNA:
+    guide_seq: Optional[str]
+
 
 flow = [
     Section(
@@ -44,7 +50,7 @@ flow = [
     ),
     Section(
         "sgRNA settings",
-        Params("guide_seq"),
+        Params("sgRNA_Seq"),
         Spoiler(
             "Optional",
             Params(
@@ -192,9 +198,10 @@ metadata = LatchMetadata(
             description="A name for each reference amplicon can be given. If multiple amplicons are given, multiple names can be specified here and their order must correspond to the amplicons given.",
             display_name="Amplicon Name",
         ),
-        "guide_seq": LatchParameter(
-            description="sgRNAs should be input as the guide RNA sequence (usually 20 nt) immediately adjacent to but not including the PAM sequence (5' (left) of NGG for SpCas9). If the sgRNA is not provided, quantification may include modifications far from the predicted editing site and may result in overestimation of editing rates.",
+        "sgRNA_Seq": LatchParameter(
+            # description="sgRNAs should be input as the guide RNA sequence (usually 20 nt) immediately adjacent to but not including the PAM sequence (5' (left) of NGG for SpCas9). If the sgRNA is not provided, quantification may include modifications far from the predicted editing site and may result in overestimation of editing rates.",
             display_name="Guide Sequence",
+            samplesheet=True,
         ),
         "guide_name": LatchParameter(
             description="A name for each sgRNA can be given. If multiple sgRNA are given, multiple names can be specified here and their order must correspond to the sgRNA given.",
