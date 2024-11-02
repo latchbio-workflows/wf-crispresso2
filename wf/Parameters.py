@@ -9,10 +9,7 @@ from latch.types import (
     Section,
     Spoiler,
 )
-from latch.types.metadata import (
-    Multiselect,
-    MultiselectOption,
-)
+from latch.types.metadata import LatchRule, Multiselect, MultiselectOption
 
 flow = [
     Section(
@@ -204,8 +201,24 @@ metadata = LatchMetadata(
             description="A file path pointing to where your results will live.",
             display_name="Output Location",
         ),
-        "sample_name": LatchParameter(display_name="Sample Name"),
-        "run_name": LatchParameter(display_name="Run Name"),
+        "sample_name": LatchParameter(
+            display_name="Sample Name",
+            rules=[
+                LatchRule(
+                    regex=r"^[a-zA-Z0-9_-]+$",
+                    message="Run name must contain only letters, digits, underscores, and dashes. No spaces are allowed.",
+                )
+            ],
+        ),
+        "run_name": LatchParameter(
+            display_name="Run Name",
+            rules=[
+                LatchRule(
+                    regex=r"^[a-zA-Z0-9_-]+$",
+                    message="Run name must contain only letters, digits, underscores, and dashes. No spaces are allowed.",
+                )
+            ],
+        ),
         "default_min_aln_score": LatchParameter(
             description="Sequences must have at least this homology percentage score with the amplicon to be aligned.",
             display_name="Minimum Homology % For Alignment to an Amplicon",

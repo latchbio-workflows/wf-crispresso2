@@ -115,7 +115,7 @@ def crispresso2_test(
     - visualization of alleles and their frequencies"""
 
     # run_dir = Initialize(outdir=output_folder, run_name=run_name)
-    results = crispresso2(
+    results, name = crispresso2(
         output_folder=output_folder,
         run_name=run_name,
         fastq_r1=fastq_r1,
@@ -194,7 +194,5 @@ def crispresso2_test(
     )
     print(results)
 
-    table_id = update_registry_tables(
-        outdir=results, run_name=run_name, sample=sample_name
-    )
+    table_id = update_registry_tables(outdir=results, run_name=run_name, sample=name)
     return results
