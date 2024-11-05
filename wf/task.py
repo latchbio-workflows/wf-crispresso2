@@ -1,569 +1,320 @@
 import os
 import subprocess
-from dataclasses import dataclass
-from os import listdir, mkdir
-from os.path import isdir, isfile
+import sys
 from pathlib import Path
-from shutil import copy, move
-from typing import Optional
+from typing import List, Optional
 
-from dataclasses_json import dataclass_json
-from latch import custom_task, small_task, workflow
+import pandas as pd
 from latch.account import Account
 from latch.registry.project import Project
 from latch.registry.table import Table
-from latch.types import LatchDir, LatchFile, LatchOutputDir
-
-import wf.Compress_Coverages
-
-
-def Copy_Directory(remote_dir: LatchDir, local_dir: str):
-    mkdir(local_dir)
-    iter_dir = remote_dir.iterdir()
-    for i in iter_dir:
-        copy(i.local_path, local_dir)
+from latch.resources.tasks import small_task
+from latch.types.directory import LatchDir, LatchOutputDir
+from latch.types.file import LatchFile
 
 
 @small_task
-def Initialize(
-    output_dir: LatchDir, sample: str, run_name: str
-) -> (LatchDir, LatchDir, LatchDir, str, str):
-    os.mkdir(run_name)
-    os.mkdir(f"{run_name}/{sample}")
-    os.mkdir(f"{run_name}/{sample}/Replicate_1")
-    os.mkdir(f"{run_name}/{sample}/Replicate_2")
-    outdir = LatchDir(sample, os.path.join(output_dir.remote_path, run_name))
-    return (
-        LatchDir(sample, os.path.join(outdir.remote_path, sample)),
-        LatchDir(
-            sample + "/Replicate_1",
-            os.path.join(outdir.remote_path, sample, "Replicate_1"),
-        ),
-        LatchDir(
-            sample + "/Replicate_2",
-            os.path.join(outdir.remote_path, sample, "Replicate_2"),
-        ),
-        sample + ".Replicate_1",
-        sample + ".Replicate_2",
-    )
-
-
-@custom_task(cpu=8, memory=48, storage_gib=300)
-def Trim_Reads(
-    fastq_1: Optional[LatchFile],
-    fastq_2: Optional[LatchFile],
-    sample: str,
-    output_dir: LatchDir,
-) -> (LatchFile, LatchFile, LatchDir, LatchDir):
-    local_directory = sample + "/"
-    if not os.path.isdir(local_directory):
-        os.mkdir(local_directory)
-
-    trim_galore_command = [
-        "~/TrimGalore-0.6.10/trim_galore",
-        "--cores",
-        "8",
-        "--paired",
-        fastq_1.local_path,
-        fastq_2.local_path,
-        "--fastqc",
-        "--output_dir",
-        local_directory,
-    ]
-    subprocess.run(" ".join(trim_galore_command), shell=True, check=True)
-
-    filepath = Path(fastq_1)
-    trimmed_fastq_1 = filepath.name.replace(".fastq.gz", "_val_1.fq.gz")
-
-    filepath = Path(fastq_2)
-    trimmed_fastq_2 = filepath.name.replace(".fastq.gz", "_val_2.fq.gz")
-
-    return (
-        LatchFile(
-            local_directory + "/" + trimmed_fastq_1,
-            output_dir.remote_directory + "/trimmed_reads/" + trimmed_fastq_1,
-        ),
-        LatchFile(
-            local_directory + "/" + trimmed_fastq_2,
-            output_dir.remote_directory + "/trimmed_reads/" + trimmed_fastq_2,
-        ),
-        LatchDir(local_directory, output_dir.remote_directory + "/trimmed_reads/"),
-        output_dir,
-    )
-
-
-@custom_task(cpu=24, memory=48, storage_gib=300)
-def Align_Reads(
-    trimmed_fastq_1: LatchFile,
-    trimmed_fastq_2: LatchFile,
-    genome: LatchDir,
-    sample: str,
-    output_dir: LatchDir,
-) -> (LatchFile, LatchDir):
-    idx_path = "BowTie2_Index/"
-    Copy_Directory(genome, idx_path)
-
-    files = os.listdir(idx_path)
-
-    for f in files:
-        if f.endswith(".1.bt2") and "rev" not in f:
-            idx_prefix = idx_path + f.replace(".1.bt2", "")
-            break
-    print(idx_prefix)
-
-    # local_bam_file = Path(trimmed_fastq_1.local_path).name.replace(
-    #    "_val_1.fq.gz", ".bam"
-    # )
-    local_bam_file = str(sample) + ".bam"
-
-    cmd_align = [
-        "mamba",
-        "run",
-        "-n",
-        "bowtie2_env",
-        "bowtie2",
-        "-p",
-        "24",
-        "-X2000",
-        "--local",
-        "--no-mixed",
-        "--no-discordant",
-        "-x",
-        idx_prefix,
-        "-1",
-        trimmed_fastq_1.local_path,
-        "-2",
-        trimmed_fastq_2.local_path,
-        "|",
-        "samtools",
-        "view",
-        "-bS",
-        "-",
-        ">",
-        local_bam_file,
-    ]
-    print(" ".join(cmd_align))
-    subprocess.run(" ".join(cmd_align), shell=True, check=True)
-
-    return LatchFile(
-        Path(local_bam_file).resolve(),
-        output_dir.remote_directory + "/" + local_bam_file,
-    ), output_dir
-
-
-@custom_task(cpu=24, memory=48, storage_gib=300)
-def BamSort(
-    bamfile: LatchFile, sort_by_name: bool, output_dir: LatchDir
-) -> (LatchFile, LatchFile, LatchDir):
-    # samtools sort -@ $nthread $inPath -o $outPath
-    # samtools index -@ $nthread $outPath
-    if sort_by_name == True:
-        local_sorted_name = Path(bamfile).name.replace(".bam", ".sorted_read.bam")
-        local_sorted_bamfile = Path(local_sorted_name).resolve()
-        cmd_sort = [
-            "samtools",
-            "sort",
-            "-@",
-            "24",
-            "-n",
-            str(bamfile.local_path),
-            "-o",
-            str(local_sorted_bamfile),
-        ]
-        subprocess.run(" ".join(cmd_sort), shell=True, check=True)
-        cmd_idx = ["touch", str(local_sorted_bamfile) + ".bai"]
-        subprocess.run(" ".join(cmd_idx), shell=True, check=True)
+def Initialize(outdir: LatchDir, run_name: str) -> LatchDir:
+    if os.path.isdir(f"{outdir.local_path}/{run_name}"):
+        return LatchDir(f"{outdir.remote_directory}/{run_name}")
     else:
-        local_sorted_name = Path(bamfile).name.replace(".bam", ".sorted.bam")
-        local_sorted_bamfile = Path(local_sorted_name).resolve()
-        cmd_sort = [
-            "samtools",
-            "sort",
-            "-@",
-            "24",
-            str(bamfile.local_path),
-            "-o",
-            str(local_sorted_bamfile),
-        ]
-        subprocess.run(" ".join(cmd_sort), shell=True, check=True)
-        cmd_idx = ["samtools", "index", "-@", "24", str(local_sorted_bamfile)]
-        subprocess.run(" ".join(cmd_idx), shell=True, check=True)
-    print(" ".join(cmd_sort))
-
-    return (
-        LatchFile(
-            local_sorted_bamfile, output_dir.remote_directory + "/" + local_sorted_name
-        ),
-        LatchFile(
-            str(local_sorted_bamfile) + ".bai",
-            output_dir.remote_directory + "/" + local_sorted_name + ".bai",
-        ),
-        output_dir,
-    )
-
-
-@custom_task(cpu=8, memory=16, storage_gib=100)
-def Picard_RmDuplicates(
-    input_bam: LatchFile, output_dir: LatchDir
-) -> (LatchFile, LatchFile, LatchDir):
-    bamfile_name = Path(input_bam.local_path).name.replace(".bam", "")
-    out_bam = bamfile_name + ".nodups.bam"
-    met_file = bamfile_name + ".nodups.metrics"
-
-    cmd_picard = [
-        "java",
-        "-jar",
-        "/root/picard.jar",
-        "MarkDuplicates",
-        "-I",
-        input_bam.local_path,
-        "-O",
-        out_bam,
-        "-M",
-        met_file,
-        "--REMOVE_DUPLICATES",
-        "true",
-    ]
-    subprocess.run(" ".join(cmd_picard), shell=True, check=True)
-
-    return (
-        LatchFile(out_bam, output_dir.remote_directory + "/" + out_bam),
-        LatchFile(met_file, output_dir.remote_directory + "/" + met_file),
-        output_dir,
-    )
-
-
-@custom_task(cpu=4, memory=8, storage_gib=100)
-def Shift_Tn5(
-    bamfile: LatchFile, baifile: LatchFile, output_dir: LatchDir
-) -> (LatchFile, LatchDir):
-    copy(bamfile.local_path, str(Path().resolve()))
-    copy(baifile.local_path, str(Path().resolve()))
-
-    local_bamfile = Path(bamfile.local_path).name.replace(".bam", ".shifted.bam")
-    cmd_shift = [
-        "alignmentSieve",
-        "-v",
-        "-b",
-        Path(bamfile.local_path).name,
-        "-o",
-        local_bamfile,
-        "--ATACshift",
-    ]
-    subprocess.run(" ".join(cmd_shift), shell=True, check=True)
-    return (
-        LatchFile(local_bamfile, str(output_dir.remote_path) + "/" + local_bamfile),
-        output_dir,
-    )
-
-
-@custom_task(cpu=4, memory=200, storage_gib=100)
-def Run_Rscript_ATACSeqQC(
-    bamfile: LatchFile,
-    baifile: LatchFile,
-    shifted_bamfile: LatchFile,
-    shifted_baifile: LatchFile,
-    saturation_bamfile: LatchFile,
-    saturation_baifile: LatchFile,
-    output_dir: LatchDir,
-) -> LatchDir:
-    local_dir = "BamQC/"
-    copy(bamfile.local_path, str(Path().resolve()))
-    copy(baifile.local_path, str(Path().resolve()))
-    copy(shifted_bamfile.local_path, str(Path().resolve()))
-    copy(shifted_baifile.local_path, str(Path().resolve()))
-    copy(saturation_bamfile.local_path, str(Path().resolve()))
-    copy(saturation_baifile.local_path, str(Path().resolve()))
-    if not isdir(local_dir):
-        os.mkdir(local_dir)
-    bamfile.download()
-    shifted_bamfile.download()
-    saturation_bamfile.download()
-
-    cmd_RunRscript = [
-        "mamba",
-        "run",
-        "-n",
-        "atacseqqc",
-        "Rscript",
-        "/root/wf/ATACSeqQC_Plots.r",
-        Path(bamfile.local_path).name,
-        Path(shifted_bamfile.local_path).name,
-        Path(saturation_bamfile.local_path).name,
-        local_dir,
-    ]
-    subprocess.run(" ".join(cmd_RunRscript), shell=True, check=True)
-    return LatchDir(local_dir, output_dir.remote_directory + "/BamQC/")
-
-
-@custom_task(cpu=4, memory=8, storage_gib=100)
-def Call_Peaks(
-    bamfile: LatchFile,
-    output_dir: LatchDir,
-    extSize: int = 150,
-    shift: int = -75,
-    slocal: int = 5000,
-    llocal: int = 20000,
-    p_val: float = 0.01,
-) -> (LatchDir, LatchDir):
-    base_name = Path(bamfile.local_path).name.replace(".sorted.bam", "")
-    local_directory = base_name + "/MACS2/"
-    cmd_macs2 = [
-        "mamba",
-        "run",
-        "-n",
-        "MACS2",
-        "macs2",
-        "callpeak",
-        "-t",
-        bamfile.local_path,
-        "-g",
-        "hs",
-        "--nomodel",
-        "--extsize",
-        str(extSize),
-        "--shift",
-        str(shift),
-        "--slocal",
-        str(slocal),
-        "--llocal",
-        str(llocal),
-        "-B",
-        "--SPMR",
-        "--keep-dup",
-        "all",
-        "-p",
-        str(p_val),
-        "-f",
-        "BAMPE",
-        "--outdir",
-        local_directory,
-        "--name",
-        base_name,
-    ]
-    subprocess.run(" ".join(cmd_macs2), shell=True, check=True)
-    return (
-        LatchDir(local_directory, output_dir.remote_directory + "/MACS2/"),
-        output_dir,
-    )
-
-
-@custom_task(cpu=8, memory=8, storage_gib=100)
-def Bam2BigWig(
-    bamfile: LatchFile, baifile: LatchFile, output_dir: LatchDir
-) -> (LatchFile, LatchDir):
-    copy(bamfile.local_path, str(Path().resolve()))
-    copy(baifile.local_path, str(Path().resolve()))
-
-    local_bamfile = Path(bamfile).name
-    base_name = Path(bamfile).name.replace(".bam", "")
-    local_file = base_name + ".bw"
-    cmd_bigwig = ["bamCoverage", "-b", local_bamfile, "-o", local_file]
-    subprocess.run(" ".join(cmd_bigwig), shell=True, check=True)
-    return (
-        LatchFile(local_file, output_dir.remote_directory + "/" + local_file),
-        output_dir,
-    )
-
-
-@custom_task(cpu=8, memory=8, storage_gib=100)
-def SamtoolsMerge(
-    bamfile1: LatchFile, bamfile2: LatchFile, output_dir: LatchDir, sample: str
-) -> (LatchFile, LatchFile, LatchDir):
-    local_file = sample + ".merged.bam"
-    cmd_merge = [
-        "samtools",
-        "merge",
-        "-@",
-        "8",
-        local_file,
-        bamfile1.local_path,
-        bamfile2.local_path,
-    ]
-    subprocess.run(" ".join(cmd_merge), shell=True, check=True)
-
-    cmd_idx = ["samtools", "index", "-@", "8", str(local_file)]
-    print(" ".join(cmd_idx))
-    subprocess.run(" ".join(cmd_idx), shell=True, check=True)
-    print(listdir(Path()))
-    return (
-        LatchFile(local_file, output_dir.remote_directory + "/" + local_file),
-        LatchFile(
-            local_file + ".bai", output_dir.remote_directory + "/" + local_file + ".bai"
-        ),
-        output_dir,
-    )
-
-
-@custom_task(cpu=4, memory=4, storage_gib=100)
-def Create_Pseudo_Replicates(
-    output_dir: LatchDir,
-    sample_id: str,
-    fastq_fow_rep_1: LatchFile,
-    fastq_rev_rep_1: LatchFile,
-    fastq_fow_rep_2: Optional[LatchFile] = None,
-    fastq_rev_rep_2: Optional[LatchFile] = None,
-) -> (LatchFile, LatchFile, LatchFile, LatchFile):
-    if (fastq_fow_rep_2 is None) or (fastq_rev_rep_2 is None):
-        localdir = str(Path().resolve())
-        cmd_split = [
-            "seqkit",
-            "split2",
-            "-1",
-            fastq_fow_rep_1.local_path,
-            "-2",
-            fastq_rev_rep_1.local_path,
-            "-p",
-            "2",
-            "-O",
-            localdir,
-        ]
-        subprocess.run(" ".join(cmd_split), shell=True, check=True)
-        move(
-            Path(fastq_fow_rep_1.local_path).name.replace(".fastq.gz", "")
-            + ".part_001.fastq.gz",
-            sample_id + ".pseudo_replicate_1.R1.fastq.gz",
-        )
-        move(
-            Path(fastq_fow_rep_1.local_path).name.replace(".fastq.gz", "")
-            + ".part_002.fastq.gz",
-            sample_id + ".pseudo_replicate_2.R1.fastq.gz",
-        )
-        move(
-            Path(fastq_rev_rep_1.local_path).name.replace(".fastq.gz", "")
-            + ".part_001.fastq.gz",
-            sample_id + ".pseudo_replicate_1.R2.fastq.gz",
-        )
-        move(
-            Path(fastq_rev_rep_1.local_path).name.replace(".fastq.gz", "")
-            + ".part_002.fastq.gz",
-            sample_id + ".pseudo_replicate_2.R2.fastq.gz",
-        )
-        return (
-            LatchFile(
-                sample_id + ".pseudo_replicate_1.R1.fastq.gz",
-                output_dir.remote_directory
-                + "/"
-                + sample_id
-                + ".pseudo_replicate_1.R1.fastq.gz",
-            ),
-            LatchFile(
-                sample_id + ".pseudo_replicate_2.R1.fastq.gz",
-                output_dir.remote_directory
-                + "/"
-                + sample_id
-                + ".pseudo_replicate_2.R1.fastq.gz",
-            ),
-            LatchFile(
-                sample_id + ".pseudo_replicate_1.R2.fastq.gz",
-                output_dir.remote_directory
-                + "/"
-                + sample_id
-                + ".pseudo_replicate_1.R2.fastq.gz",
-            ),
-            LatchFile(
-                sample_id + ".pseudo_replicate_2.R2.fastq.gz",
-                output_dir.remote_directory
-                + "/"
-                + sample_id
-                + ".pseudo_replicate_2.R2.fastq.gz",
-            ),
-        )
-    else:
-        return (fastq_fow_rep_1, fastq_fow_rep_2, fastq_rev_rep_1, fastq_rev_rep_2)
-
-
-@custom_task(cpu=4, memory=8, storage_gib=100)
-def Sort_Narrow_Peaks(MACS2_dir: LatchDir, tag: str) -> LatchFile:
-    files = MACS2_dir.iterdir()
-    for f in files:
-        if Path(f).name.endswith("." + tag):
-            narrow_peakfile = f
-            break
-    local_filename = Path(narrow_peakfile).name.replace("." + tag, ".sorted." + tag)
-    cmd_sort_bed = ["sort-bed", narrow_peakfile.local_path, ">", local_filename]
-    subprocess.run(" ".join(cmd_sort_bed), shell=True, check=True)
-    return LatchFile(local_filename, MACS2_dir.remote_directory + "/" + local_filename)
-
-
-@custom_task(cpu=4, memory=8, storage_gib=100)
-def Run_IDR(
-    sorted_peaks_rep1: LatchFile,
-    sorted_peaks_rep2: LatchFile,
-    oracle_peaks: LatchFile,
-    sample: str,
-    output_dir: LatchDir,
-    idr_thresh: float = 0.01,
-) -> (LatchFile, LatchFile, LatchFile):
-    output_file = sample + ".idrValues"
-    error_file = sample + "idrError.txt"
-    cmd_idr = [
-        "mamba",
-        "run",
-        "-n",
-        "idr",
-        "idr",
-        "--verbose",
-        "--samples",
-        sorted_peaks_rep1.local_path,
-        sorted_peaks_rep2.local_path,
-        "--peak-list",
-        oracle_peaks.local_path,
-        "--rank",
-        "p.value",
-        "--plot",
-        "--soft-idr-threshold",
-        str(idr_thresh),
-        "-o",
-        output_file,
-        "-l",
-        error_file,
-    ]
-    subprocess.run(" ".join(cmd_idr), shell=True, check=True)
-    cmd_sort_bed = ["sort-bed", output_file, ">", sample + ".sorted.idrValues"]
-    subprocess.run(" ".join(cmd_sort_bed), shell=True, check=True)
-    return (
-        LatchFile(output_file, output_dir.remote_directory + "/" + output_file),
-        LatchFile(error_file, output_dir.remote_directory + "/" + error_file),
-        LatchFile(
-            sample + ".sorted.idrValues",
-            output_dir.remote_directory + "/" + sample + ".sorted.idrValues",
-        ),
-    )
-
-
-@custom_task(cpu=4, memory=48, storage_gib=50)
-def Compress_Coverages_Sample(
-    bigWig_file: LatchFile, sample: str, outPath: LatchDir
-) -> LatchDir:
-    local_dir = "cov_parquet"
-    if os.path.isdir(local_dir):
-        os.mkdir(local_dir)
-
-    print(bigWig_file, outPath, sample)
-    if not os.path.isdir(local_dir):
-        os.mkdir(local_dir)
-
-    wf.Compress_Coverages.Compress_Coverage(bigWig_file.local_path, local_dir, sample)
-
-    return LatchDir(local_dir, os.path.join(outPath.remote_directory, local_dir))
-
-
-### Sample: sample_id
-### BamFile: merged_bam
-### IDR_Peaks_Merged: idr_sorted+
+        os.mkdir(run_name)
+        return LatchDir(run_name, os.path.join(outdir.remote_directory, run_name))
 
 
 @small_task
-def Update_Registry_Tables(
-    sample: str,
-    bamfile: LatchFile,
-    replicate_1_bamfile: LatchFile,
-    replicate_2_bamfile: LatchFile,
-    IDR_Peaks_Merged: LatchFile,
+def crispresso2(
+    output_folder: LatchDir,
     run_name: str,
-) -> str:
-    target_project_name = "ATAC-Seq-Workflows"
+    fastq_r1: LatchFile,
+    amplicon_seq: List[str],
+    fastq_r2: Optional[LatchFile] = None,
+    guide_seq: Optional[List[str]] = None,
+    amplicon_name: Optional[List[str]] = None,
+    expected_hdr_amplicon_seq: Optional[str] = None,
+    coding_seq: Optional[str] = None,
+    guide_name: Optional[List[str]] = None,
+    flexiguide_seq: Optional[str] = None,
+    flexiguide_homology: Optional[int] = 80,
+    flexiguide_name: Optional[str] = None,
+    fastp_command: Optional[str] = "fastp",
+    fastp_options_string: Optional[str] = None,
+    quantification_window_coordinates: Optional[str] = None,
+    amplicon_min_alignment_score: Optional[List[int]] = None,
+    prime_editing_pegRNA_spacer_seq: Optional[str] = None,
+    prime_editing_pegRNA_extension_seq: Optional[str] = None,
+    prime_editing_pegRNA_scaffold_seq: Optional[str] = None,
+    prime_editing_pegRNA_scaffold_min_match_length: Optional[int] = None,
+    prime_editing_nicking_guide_seq: Optional[str] = None,
+    prime_editing_override_prime_edited_ref_seq: Optional[str] = None,
+    annotate_wildtype_allele: Optional[str] = None,
+    file_prefix: Optional[str] = None,
+    name: Optional[str] = None,
+    dsODN: Optional[str] = None,
+    bam_input: Optional[str] = None,
+    bam_chr_loc: Optional[str] = None,
+    min_frequency_alleles_around_cut_to_plot: float = 0.2,
+    max_rows_alleles_around_cut_to_plot: int = 50,
+    exclude_bp_from_left: int = 15,
+    exclude_bp_from_right: int = 15,
+    min_average_read_quality: int = 0,
+    min_single_bp_quality: int = 0,
+    min_bp_quality_or_N: int = 0,
+    conversion_nuc_from: str = "C",
+    conversion_nuc_to: str = "T",
+    prime_editing_pegRNA_extension_quantification_window_size: int = 5,
+    quantification_window_size: int = -3,
+    quantification_window_center: int = -3,
+    default_min_aln_score: int = 60,
+    plot_window_size: int = 20,
+    discard_guide_positions_overhanging_amplicon_edge: bool = False,
+    split_interleaved_input: bool = False,
+    trim_sequences: bool = False,
+    ignore_substitutions: bool = False,
+    ignore_insertions: bool = False,
+    ignore_deletions: bool = False,
+    discard_indel_reads: bool = False,
+    expand_ambiguous_alignments: bool = False,
+    base_editor_output: bool = False,
+    plot_histogram_outliers: bool = False,
+    expand_allele_plots_by_quantification: bool = False,
+    allele_plot_pcts_only_for_assigned_reference: bool = False,
+    write_detailed_allele_table: bool = False,
+    fastq_output: bool = False,
+    keep_intermediate: bool = False,
+    dump: bool = False,
+    crispresso1_mode: bool = False,
+    suppress_report: bool = False,
+    suppress_plots: bool = False,
+    place_report_in_output_folder: bool = False,
+    debug: bool = False,
+    no_rerun: bool = False,
+    auto: bool = False,
+    needleman_wunsch_aln_matrix_loc: str = "EDNAFULL",
+    needleman_wunsch_gap_open: int = -20,
+    needleman_wunsch_gap_extend: int = -2,
+    needleman_wunsch_gap_incentive: int = 1,
+    assign_ambiguous_alignments_to_first_reference: bool = False,
+    suppress_amplicon_name_truncation: bool = False,
+    verbosity: int = 3,
+    zip_output: bool = False,
+    disable_guardrails: bool = False,
+) -> (LatchDir, str):
+    if name is not None:
+        name = name.replace(" ", "_")
+
+    amplicon_seq = ",".join(amplicon_seq)
+    amplicon_seq = amplicon_seq.upper()
+
+    if amplicon_name is not None:
+        amplicon_name = ",".join(amplicon_name)
+    if guide_seq is not None:
+        guide_seq = ",".join(guide_seq)
+        guide_seq = guide_seq.upper()
+
+    if guide_name is not None:
+        guide_name = ",".join(guide_name)
+    if amplicon_min_alignment_score is not None:
+        amplicon_min_alignment_score = ",".join(
+            [str(x) for x in amplicon_min_alignment_score]
+        )
+    if prime_editing_pegRNA_spacer_seq != None:
+        prime_editing_pegRNA_spacer_seq = prime_editing_pegRNA_spacer_seq.upper()
+    if prime_editing_pegRNA_extension_seq != None:
+        prime_editing_pegRNA_extension_seq = prime_editing_pegRNA_extension_seq.upper()
+    if prime_editing_pegRNA_scaffold_seq != None:
+        prime_editing_pegRNA_scaffold_seq = prime_editing_pegRNA_scaffold_seq.upper()
+    if prime_editing_nicking_guide_seq != None:
+        prime_editing_nicking_guide_seq = prime_editing_nicking_guide_seq.upper()
+    if prime_editing_override_prime_edited_ref_seq != None:
+        prime_editing_override_prime_edited_ref_seq = (
+            prime_editing_override_prime_edited_ref_seq.upper()
+        )
+    if flexiguide_seq != None:
+        flexiguide_seq = flexiguide_seq.upper()
+
+    header_args = locals()
+
+    flag_params = [
+        "base_editor_output",
+        "discard_guide_positions_overhanging_amplicon_edge",
+        "split_interleaved_input",
+        "trim_sequences",
+        "stringent_flash_merging",
+        "ignore_substitutions",
+        "ignore_insertions",
+        "ignore_deletions",
+        "discard_indel_reads",
+        "expand_ambiguous_alignments",
+        "base_editor_output",
+        "plot_histogram_outliers",
+        "expand_allele_plots_by_quantification",
+        "allele_plot_pcts_only_for_assigned_reference",
+        "write_detailed_allele_table",
+        "fastq_output",
+        "keep_intermediate",
+        "dump",
+        "crispresso1_mode",
+        "suppress_report",
+        "suppress_plots",
+        "place_report_in_output_folder",
+        "auto",
+        "debug",
+        "no_rerun",
+        "assign_ambiguous_alignments_to_first_reference",
+        "suppress_amplicon_name_truncation",
+        "zip_output",
+        "disable_guardrails",
+    ]
+
+    protected_params = {
+        "output_folder": True,
+        "fastq_r1": True,
+        "fastq_r2": True,
+        "amplicon_seq": True,
+        "name": True,
+        "run_name": True,
+    }
+    optional_cmd_params = []
+    for param, value in header_args.items():
+        if param not in protected_params and value is not None:
+            if param not in flag_params:
+                if str(value) is not "" and value is not None and value != "<nil>":
+                    optional_cmd_params.extend((f"--{param}", str(value)))
+            else:
+                if value:
+                    optional_cmd_params.append(f"--{param}")
+
+    fastq_r1_path = fastq_r1.local_path
+    if fastq_r2 is not None:
+        _ = fastq_r2.local_path
+
+    # if name is None or name == "":
+    #    print("--->Here...")
+    #    name = Path(fastq_r1_path).name.split(".")[0]
+
+    local_output_dir = Path(f"/root/outputs")
+    local_output_dir.mkdir(parents=True, exist_ok=True)
+
+    local_run_dir = Path(f"/root/outputs/{run_name}")
+    local_run_dir.mkdir(parents=True, exist_ok=True)
+    crisp_output_dir = Path(f"/root/outputs/{run_name}/CRISPResso_on_{name}")
+    crisp_output_dir.mkdir(parents=True, exist_ok=True)
+    # if not os.path.isdir(crisp_output_dir):
+    #    os.mkdir(crisp_output_dir)
+
+    crispresso_cmd = [
+        "mamba",
+        "run",
+        "-n",
+        "crispresso2_env",
+        "CRISPResso",
+        "--fastq_r1",
+        fastq_r1.local_path,
+        "--amplicon_seq",
+        amplicon_seq,
+        "--output_folder",
+        str(crisp_output_dir),
+    ] + optional_cmd_params
+
+    crispresso_cmd.extend(("--name", name))
+    if fastq_r2 is not None:
+        crispresso_cmd += ["--fastq_r2", fastq_r2.local_path]
+    print(name)
+
+    print(f"Command: {crispresso_cmd}")
+    cmd = " ".join(crispresso_cmd)
+    results = subprocess.run(cmd, shell=True, check=True)
+
+    print(f"Working directory {os.getcwd()}")
+    if results is not None:
+        print(f" stdout: {results.stdout}" + f" stderr: {results.stderr}")
+    else:
+        print("No process output generated")
+
+    return (
+        LatchOutputDir(
+            str(local_output_dir.resolve()),
+            output_folder.remote_directory,
+        ),
+        name,
+    )
+
+
+@small_task
+def update_registry_tables(outdir: LatchOutputDir, run_name: str, sample: str) -> str:
+    print(outdir)
+    sample_dir = f"{outdir.remote_path}/{run_name}/CRISPResso_on_{sample}/"
+    html_path = ""
+
+    for f in LatchDir(sample_dir).iterdir():
+        if ".html" in f.remote_path:
+            html_path = f.remote_path
+            break
+    if html_path == "":
+        print("Missing html file.... ")
+        sys.exit(-1)
+
+    sample_dir = f"{outdir.remote_path}/{run_name}/CRISPResso_on_{sample}/CRISPResso_on_{sample}/"
+    try:
+        for g in LatchDir(sample_dir).iterdir():
+            fname = Path(g.remote_path).name
+            if fname.startswith("Alleles_frequency_table_around_sgRNA_"):
+                allele_freq_file = g
+    except ValueError:
+        sample_dir = f"{outdir.remote_path}/{run_name}/CRISPResso_on_{sample}/"
+        for f in LatchDir(sample_dir).iterdir():
+            if "CRISPResso_on" in f.remote_path and ".html" not in f.remote_path:
+                sample_dir = f.remote_path + "/"
+                for g in LatchDir(sample_dir).iterdir():
+                    fname = Path(g.remote_path).name
+                    if fname.startswith("Alleles_frequency_table_around_sgRNA_"):
+                        allele_freq_file = g
+
+    editing_quantification = LatchFile(
+        f"{sample_dir}CRISPResso_quantification_of_editing_frequency.txt"
+    )
+    df_editing_quantification = pd.read_csv(editing_quantification, sep="\t")
+    columns = df_editing_quantification.columns.tolist() + ["Indels%"]
+    # df_editing_quantification["Sample Name"] = sample
+    df_editing_quantification["Indels%"] = (
+        (
+            df_editing_quantification["Only Insertions"]
+            + df_editing_quantification["Only Deletions"]
+            + df_editing_quantification["Insertions and Deletions"]
+        )
+        / df_editing_quantification["Reads_in_input"]
+        * 100.0
+    )
+
+    print(df_editing_quantification.head())
+    col_types = [str] + [float] * (len(columns) - 1)
+    print(columns)
+    print(col_types)
+
+    try:
+        df_indels = pd.read_csv(allele_freq_file.local_path, sep="\t")
+
+        top_5_alleles = df_indels.head(5)
+        top_5_alleles[["Aligned_Sequence", "%Reads"]]
+        alleles = top_5_alleles["Aligned_Sequence"].tolist()
+        read_fracs = top_5_alleles["%Reads"].tolist()
+
+        for i in range(len(alleles)):
+            df_editing_quantification[f"Allele_{str(i+1)}"] = alleles[i]
+            df_editing_quantification[f"Read_Frac_Allele_{str(i+1)}"] = read_fracs[i]
+            columns.append(f"Allele_{str(i+1)}")
+            col_types.append(str)
+            columns.append(f"Read_Frac_Allele_{str(i+1)}")
+            col_types.append(float)
+    except Exception:
+        print("Allele Frequency Tables missing. Probably a prime editing experiment? ")
+
+    columns = ["sample name"] + columns + ["HTML"]
+    col_types = [str] + col_types + [LatchFile]
+    df_editing_quantification["HTML"] = LatchFile(html_path)
+
+    target_project_name = "Crispresso2_Runs"
     target_table_name = f"{run_name}_Results"
     account = Account.current()
     target_project = next(
@@ -593,23 +344,6 @@ def Update_Registry_Tables(
         ),
         None,
     )
-    columns = [
-        "sample",
-        "bamfile",
-        "replicate_1_bamfile",
-        "replicate_2_bamfile",
-        "IDR_Peaks_Merged",
-    ]
-    col_types = [str, LatchFile, LatchFile, LatchFile, LatchFile]
-    values = [
-        sample,
-        bamfile,
-        replicate_1_bamfile,
-        replicate_2_bamfile,
-        IDR_Peaks_Merged,
-    ]
-
-    d = dict(zip(columns, values))
 
     if target_table == None:
         ### Upsert_Table
@@ -627,81 +361,16 @@ def Update_Registry_Tables(
                 updater.upsert_column(columns[i], type=col_types[i])
         print("Upserted columns")
 
+    df_editing_quantification = df_editing_quantification.fillna(0)
+
     with target_table.update() as updater:
         ctr = len(target_table.get_dataframe())
-        updater.upsert_record(name=str(ctr), **d)
-
-    return target_table.id
-
-
-@small_task
-def Update_Registry_Tables_Plots(
-    sample: str, output_dir: LatchDir, cov_path: LatchDir, run_name: str
-) -> str:
-    target_project_name = "ATAC-Seq-Workflows"
-    target_table_name = f"{run_name}_Plots"
-    account = Account.current()
-    target_project = next(
-        (
-            project
-            for project in account.list_registry_projects()
-            if project.get_display_name() == target_project_name
-        ),
-        None,
-    )
-
-    if target_project is None:
-        with account.update() as account_updater:
-            account_updater.upsert_registry_project(target_project_name)
-        target_project = next(
-            project
-            for project in account.list_registry_projects()
-            if project.get_display_name() == target_project_name
-        )
-        print("Upserted project")
-
-    target_table = next(
-        (
-            table
-            for table in target_project.list_tables()
-            if table.get_display_name() == target_table_name
-        ),
-        None,
-    )
-    columns = [
-        "sample",
-        "Fragment_Distribution",
-        "Feature_Alignment_Coverage",
-        "Saturation_Curves",
-        "Peak_Coverage",
-    ]
-    col_types = [str, LatchFile, LatchFile, LatchFile, LatchDir]
-    values = [
-        sample,
-        LatchFile(f"{output_dir.remote_directory}/Frag_Sizes.txt"),
-        LatchFile(f"{output_dir.remote_directory}/featurealignment_coverage.txt"),
-        LatchFile(f"{output_dir.remote_directory}/Saturation_Plots.txt"),
-        cov_path,
-    ]
-    d = dict(zip(columns, values))
-
-    if target_table == None:
-        ### Upsert_Table
-        with target_project.update() as project_updater:
-            project_updater.upsert_table(target_table_name)
-        target_table = next(
-            table
-            for table in target_project.list_tables()
-            if table.get_display_name() == target_table_name
-        )
-        print("Upserted table")
-
-        with target_table.update() as updater:
-            for i in range(0, len(columns)):
-                updater.upsert_column(columns[i], type=col_types[i])
-        print("Upserted columns")
-    with target_table.update() as updater:
-        ctr = len(target_table.get_dataframe())
-        updater.upsert_record(name=str(ctr), **d)
+        for i, row in df_editing_quantification.iterrows():
+            d = row.to_dict()
+            # d["name"] = sample + "_" + d["Amplicon"]
+            d["sample name"] = sample
+            print(ctr, d)
+            updater.upsert_record(name=sample + "_" + d["Amplicon"], **d)
+            ctr += 1
 
     return target_table.id
